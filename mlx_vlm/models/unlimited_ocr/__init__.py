@@ -13,6 +13,7 @@ that `model_type: unlimited-ocr` resolves to a real architecture; see the
 to this package.
 """
 
+from ..base import install_auto_processor_patch
 from ..deepseekocr import (
     DeepseekOCRProcessor,
     LanguageModel,
@@ -26,6 +27,16 @@ from ..deepseekocr.config import (
     TextConfig,
     VisionConfig,
 )
+from .processing import UnlimitedOCRProcessor
+
+# Unlimited-OCR's processor_config.json declares processor_class
+# "UnlimitedOCRHFProcessor", which transformers' AutoProcessor cannot resolve.
+# Reuse the DeepSeek-OCR processor (matching preprocessing) via the composable
+# AutoProcessor patch, keyed on the `unlimited-ocr` model_type. We register the
+# UnlimitedOCRProcessor subclass (not the base) because the base patch forces
+# trust_remote_code=True, which would pull in the repo's torch-only remote code;
+# the subclass forces it back off. The patch chains with the deepseekocr one.
+install_auto_processor_patch("unlimited-ocr", UnlimitedOCRProcessor)
 
 __all__ = [
     "DeepseekOCRProcessor",
@@ -35,6 +46,7 @@ __all__ = [
     "ModelConfig",
     "ProjectorConfig",
     "TextConfig",
+    "UnlimitedOCRProcessor",
     "VisionConfig",
     "VisionModel",
 ]
