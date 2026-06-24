@@ -30,6 +30,12 @@ def _flat_seq_len(value):
 
 def _collate_arrays(values):
     """Stack same-shaped arrays, or concatenate variable-length feature rows."""
+    if values and isinstance(values[0], list):
+        # Multi-crop vision tensors (e.g. DeepSeek-OCR global+local views): each
+        # item is a list of mx.arrays the model consumes directly. Flatten the
+        # per-item crop lists into one list (for batch_size==1 this is the single
+        # item's list); images_spatial_crop tracks the per-item crop layout.
+        return [crop for item in values for crop in item]
     try:
         return mx.stack(values)
     except ValueError:

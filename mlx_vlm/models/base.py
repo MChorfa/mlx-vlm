@@ -43,10 +43,17 @@ def to_mlx(data: dict) -> dict:
         elif isinstance(value, np.ndarray):
             result[key] = mx.array(value)
         elif isinstance(value, list):
-            try:
-                result[key] = mx.array(np.array(value))
-            except (ValueError, TypeError):
+            if value and all(isinstance(v, mx.array) for v in value):
+                # Multi-crop vision tensors (e.g. DeepSeek-OCR global+local views)
+                # arrive as a list of mx.arrays the model consumes directly.
+                # np.array() on bf16 mx.arrays raises a PEP-3118 buffer mismatch,
+                # so keep the list as-is rather than trying to stack it.
                 result[key] = value
+            else:
+                try:
+                    result[key] = mx.array(np.array(value))
+                except (ValueError, TypeError):
+                    result[key] = value
         else:
             result[key] = value
     return result

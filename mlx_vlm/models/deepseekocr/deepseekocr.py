@@ -300,6 +300,12 @@ class Model(nn.Module):
 
                 if images_in_this_batch:
                     images_in_this_batch = mx.concatenate(images_in_this_batch, axis=0)
+                    # The SAM/CLIP vision encoders use a custom Metal kernel with no
+                    # vjp (backward) rule, so gradients cannot flow through the vision
+                    # tower. For frozen-vision LoRA (the default) treat the image
+                    # features as constants so autodiff never traverses the kernel.
+                    if not getattr(self, "_train_vision", False):
+                        images_in_this_batch = mx.stop_gradient(images_in_this_batch)
                     # Find positions where images should be placed
                     image_indices = np.where(images_seq_mask[idx])[0].tolist()
                     # Directly assign the image features to those positions
