@@ -1,5 +1,6 @@
 import argparse
 import glob
+import json
 import shutil
 from pathlib import Path
 from typing import Callable, Optional, Union
@@ -142,6 +143,40 @@ def mixed_quant_predicate_builder(
     return mixed_quant_predicate
 
 
+def _tokenizer_decoder_type(directory: Path):
+    path = directory / "tokenizer.json"
+    if not path.exists():
+        return None
+    try:
+        decoder = json.loads(path.read_text(encoding="utf-8")).get("decoder")
+    except (ValueError, OSError):
+        return None
+    return decoder.get("type") if isinstance(decoder, dict) else None
+
+
+def _restore_bytelevel_tokenizer(model_path: Path, mlx_path: Path) -> None:
+    """Repair a byte-level tokenizer clobbered by `processor.save_pretrained`.
+
+    Some processors resolve the slow tokenizer, so saving re-serializes a
+    byte-level (ByteLevel decoder, Ġ-prefixed) vocab as a Metaspace/SPM tokenizer
+    that no longer matches it — a converted model then decodes spaces/newlines as
+    raw Ġ/Ċ markers. When the source tokenizer was ByteLevel and the saved one is
+    not, restore the source tokenizer files verbatim. No-op for every other model.
+    """
+    if _tokenizer_decoder_type(model_path) != "ByteLevel":
+        return
+    if _tokenizer_decoder_type(mlx_path) == "ByteLevel":
+        return
+    restored = []
+    for name in ("tokenizer.json", "tokenizer_config.json", "special_tokens_map.json"):
+        source = model_path / name
+        if source.exists():
+            shutil.copy(source, mlx_path / name)
+            restored.append(name)
+    if restored:
+        print(f"[INFO] Restored byte-level tokenizer files: {', '.join(restored)}")
+
+
 def convert(
     hf_path: str,
     mlx_path: str = "mlx_model",
@@ -243,6 +278,7 @@ def convert(
             shutil.copytree(item, dest)
 
     processor.save_pretrained(mlx_path)
+    _restore_bytelevel_tokenizer(model_path, mlx_path)
 
     save_config(config, config_path=mlx_path / "config.json")
 
