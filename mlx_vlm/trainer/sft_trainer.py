@@ -31,11 +31,16 @@ def _flat_seq_len(value):
 def _collate_arrays(values):
     """Stack same-shaped arrays, or concatenate variable-length feature rows."""
     if values and isinstance(values[0], list):
-        # Multi-crop vision tensors (e.g. DeepSeek-OCR global+local views): each
-        # item is a list of mx.arrays the model consumes directly. Flatten the
-        # per-item crop lists into one list (for batch_size==1 this is the single
-        # item's list); images_spatial_crop tracks the per-item crop layout.
-        return [crop for item in values for crop in item]
+        # Multi-crop vision tensors (e.g. DeepSeek-OCR pixel_values = [patches,
+        # image_ori]) the model indexes as pixel_values[0]/[1]. Concatenate
+        # element-wise across the batch (axis 0) so patches and global views from
+        # all items are stacked while the 2-element structure is preserved;
+        # images_spatial_crop tracks each item's crop count for slicing. For
+        # batch_size 1 this returns the single item's [patches, image_ori].
+        width = len(values[0])
+        return [
+            mx.concatenate([item[i] for item in values], axis=0) for i in range(width)
+        ]
     try:
         return mx.stack(values)
     except ValueError:
@@ -243,6 +248,11 @@ def iterate_batches(dataset, batch_size, max_seq_length, train=False):
             attention_mask_batch = np.zeros((len(items), padded_len), dtype=np.int32)
             has_completion_mask = any("completion_mask" in item for item in items)
             completion_mask_batch = np.zeros((len(items), padded_len), dtype=np.int32)
+            # images_seq_mask is a per-token mask that must line up with the padded
+            # input_ids (right-padded), so pad it here rather than stacking raw
+            # variable-length masks (which breaks batch_size > 1 for multi-crop VLMs).
+            has_images_seq_mask = any("images_seq_mask" in item for item in items)
+            images_seq_mask_batch = np.zeros((len(items), padded_len), dtype=bool)
 
             for i, item in enumerate(items):
                 arr = np.array(_squeeze_leading_batch_dim(item["input_ids"])).reshape(
@@ -265,6 +275,14 @@ def iterate_batches(dataset, batch_size, max_seq_length, train=False):
                     ).reshape(-1)
                     completion_mask_batch[i, :L] = completion_mask[:L]
 
+                if "images_seq_mask" in item:
+                    seq_mask = np.array(
+                        _squeeze_leading_batch_dim(item["images_seq_mask"])
+                    ).reshape(-1)
+                    images_seq_mask_batch[i, : min(len(seq_mask), padded_len)] = (
+                        seq_mask[:padded_len]
+                    )
+
             pixel_values_batch = None
             if "pixel_values" in items[0] and items[0]["pixel_values"] is not None:
                 pixel_values_batch = _collate_arrays(
@@ -278,6 +296,8 @@ def iterate_batches(dataset, batch_size, max_seq_length, train=False):
             }
             if has_completion_mask:
                 batch["completion_mask"] = mx.array(completion_mask_batch)
+            if has_images_seq_mask:
+                batch["images_seq_mask"] = mx.array(images_seq_mask_batch)
 
             extra_keys = [
                 k
@@ -288,6 +308,7 @@ def iterate_batches(dataset, batch_size, max_seq_length, train=False):
                     "attention_mask",
                     "completion_mask",
                     "pixel_values",
+                    "images_seq_mask",
                 )
             ]
             for k in extra_keys:
